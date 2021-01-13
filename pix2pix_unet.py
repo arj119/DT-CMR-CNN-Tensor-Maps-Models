@@ -11,13 +11,6 @@ Original file is located at
 ## Mount drive folders containing dataset
 """
 
-# Commented out IPython magic to ensure Python compatibility.
-# from google.colab import drive
-
-# drive.mount('/content/drive')
-# %ls
-
-# %%
 from tensorflow.python.keras import optimizers
 from tensorflow.python.keras import models
 from tensorflow.python.keras import losses
@@ -35,13 +28,16 @@ import sys
 import glob
 import os
 import time
-# from IPython import get_ipython
+from IPython import get_ipython
 import seaborn as sns
 from matplotlib import pyplot as plt
 from scipy import stats
-# from IPython import display
+from IPython import display
+import utils
 
 # Commented out IPython magic to ensure Python compatibility.
+from utils.DataLoading import *
+
 os.chdir('./drive/My Drive/Colab Notebooks')
 # %ls
 
@@ -109,149 +105,9 @@ d = {'Input': test_inputs, 'Output': test_outputs}
 df = pd.DataFrame(d)
 df.to_csv('test_subject_list_' + dti_param + '.csv', index=False)
 
-"""## Data Exploration
-
-### Utility Functions
-"""
-
-
-# Normalise array to range [-1,1]
-def normalise_matrices(array):
-    array = np.true_divide(array, 127.5) - 1
-    return array
-
-
-def scale_output(array):
-    array = array * SCALE_TARGET
-    return array
-
-
-def load_data_into_array(name, input=True, normalise_input=True):
-    array = np.load(name)
-    array = array['arr_0']
-    array = np.float32(array)
-    if input:
-        if normalise_input:
-            array = normalise_matrices(array)
-    else:
-        array = scale_output(array)
-    array = np.expand_dims(array, axis=0)
-    return array
-
-
-def data_info(data_arr, isOutput=False):
-    data = data_arr.flatten()
-    out = ""
-    if isOutput:
-        print("Output data from", dti_param)
-    else:
-        print("Input data from", dti_param)
-    print('min', np.amin(data))
-    print('max', np.amax(data))
-    print('mean', np.mean(data))
-    print()
-
-
-"""## Visualising an Example"""
-
-fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
-fig.set_figwidth(30)
-
-example = load_data_into_array(train_inputs[0], normalise_input=False)
-ax1.set_title("Original Data")
-sns.distplot(example, ax=ax1)
-data_info(example)
-
-scaled = load_data_into_array(train_inputs[0], normalise_input=False)
-scaled = np.true_divide(scaled - 127.5, 127.5)
-ax2.set_title("Scaled Data")
-sns.distplot(scaled, ax=ax2)
-data_info(scaled)
-
-import warnings
-
-warnings.filterwarnings("ignore")
-
-standardised = load_data_into_array(train_inputs[0])
-ax3.set_title("Standardised Data")
-sns.distplot(standardised, ax=ax3)
-data_info(standardised)
-
-plt.show()
-
 """## Data Preprocessing"""
 
 
-# load numpy arrays
-def load_npz_files(input_list, output_list, dti_param):
-    ''' load input and output arrays from lists of npz files '''
-    # loop through the list and stack arrays
-    for idx, val in enumerate(input_list):
-        if idx == 0:
-            input_arrays = load_data_into_array(val)
-        else:
-            temp = load_data_into_array(val)
-            input_arrays = np.concatenate((input_arrays, temp), axis=0)
-
-    for idx, val in enumerate(output_list):
-        if idx == 0:
-            output_arrays = load_data_into_array(val, input=False)
-        else:
-            temp = load_data_into_array(val, input=False)
-            output_arrays = np.concatenate((output_arrays, temp), axis=0)
-
-    if OUTPUT_CHANNELS == 1:
-        output_arrays = np.expand_dims(output_arrays, axis=-1)
-
-    # check there is no nan or inf
-    input_arrays = np.nan_to_num(input_arrays)
-    output_arrays = np.nan_to_num(output_arrays)
-    assert np.isnan(np.sum(input_arrays)) == False, 'input_array has nans'
-    assert np.isnan(np.sum(output_arrays)) == False, 'output_arrays has nans'
-    assert np.isinf(np.sum(input_arrays)) == False, 'input_array has infs'
-    assert np.isinf(np.sum(output_arrays)) == False, 'output_arrays has infs'
-
-    assert input_arrays.shape[0] == output_arrays.shape[0]
-    return input_arrays, output_arrays
-
-
-#  Data augmentation functions
-def random_crop(img_in, img_out):
-    #  stack images before rotation so that the rotation is the same
-    stacked_image = tf.concat([img_in, img_out], axis=2)
-    cropped_image = tf.image.random_crop(
-        stacked_image, size=[IMG_HEIGHT, IMG_WIDTH, INPUT_CHANNELS + OUTPUT_CHANNELS])
-
-    r_img_in = cropped_image[:, :, 0:INPUT_CHANNELS]
-    r_img_out = cropped_image[:, :, INPUT_CHANNELS:]
-    # if OUTPUT_CHANNELS == 1:
-    #     r_img_out = tf.expand_dims(r_img_out, axis=2)
-
-    return r_img_in, r_img_out
-
-
-def augment(img_in, img_out):
-    # Add 20 pixels padding
-    add_n = 20
-    img_in = tf.image.resize_with_crop_or_pad(
-        img_in, IMG_HEIGHT + add_n, IMG_WIDTH + add_n)
-    img_out = tf.image.resize_with_crop_or_pad(
-        img_out, IMG_HEIGHT + add_n, IMG_WIDTH + add_n)
-    img_in, img_out = random_crop(img_in, img_out)
-
-    return img_in, img_out
-
-
-# get the tensorflow train and validate datasets to tensorflow
-def get_baseline_dataset(input_list, output_list):
-    # read arrays
-    input_arrays, output_arrays = load_npz_files(
-        input_list, output_list, dti_param)
-
-    dataset = tf.data.Dataset.from_tensor_slices((input_arrays, output_arrays))
-    data_info(input_arrays, False)
-    data_info(output_arrays, True)
-    return dataset
 
 
 # Training Dataset
