@@ -1,4 +1,5 @@
 import numpy as np
+import tensorflow as tf
 from matplotlib import pyplot as plt
 
 """## Generate Images
@@ -14,6 +15,11 @@ we want the batch statistics while running the model
 on the test dataset. If we use training=False, we will get
 the accumulated statistics learned from the training dataset (which we don't want)
 """
+
+
+# Returns mean absolute error or l1 loss of predicted vs target image
+def mae(predicted, target):
+    return tf.reduce_mean(tf.abs(target - predicted))
 
 
 def denormalise_output(arr, scale_factor):

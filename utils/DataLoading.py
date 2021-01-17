@@ -65,10 +65,10 @@ def load_npz_files(input_list, output_list, output_channels, scale_factor=1):
     # check there is no nan or inf
     input_arrays = np.nan_to_num(input_arrays)
     output_arrays = np.nan_to_num(output_arrays)
-    assert np.isnan(np.sum(input_arrays)) is False, 'input_array has nans'
-    assert np.isnan(np.sum(output_arrays)) is False, 'output_arrays has nans'
-    assert np.isinf(np.sum(input_arrays)) is False, 'input_array has infs'
-    assert np.isinf(np.sum(output_arrays)) is False, 'output_arrays has infs'
+    assert not np.isnan(np.sum(input_arrays)), 'input_array has nans'
+    assert not np.isnan(np.sum(output_arrays)), 'output_arrays has nans'
+    assert not np.isinf(np.sum(input_arrays)), 'input_array has infs'
+    assert not np.isinf(np.sum(output_arrays)), 'output_arrays has infs'
     assert input_arrays.shape[0] == output_arrays.shape[0]
 
     return input_arrays, output_arrays
@@ -108,6 +108,6 @@ def get_baseline_dataset(input_list, output_list, dti_param):
         input_list, output_list, dti_param)
 
     dataset = tf.data.Dataset.from_tensor_slices((input_arrays, output_arrays))
-    data_info(input_arrays, False)
-    data_info(output_arrays, True)
+    data_info(input_arrays, dti_param, is_output=False)
+    data_info(output_arrays, dti_param, is_output=True)
     return dataset

@@ -12,17 +12,18 @@ Original file is located at
 
 from sklearn.model_selection import train_test_split
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime
 import glob
 import os
 import time
 from IPython import get_ipython
 from matplotlib import pyplot as plt
 from IPython import display
+from tensorboard import program
 
 # Commented out IPython magic to ensure Python compatibility.
 from utils.DataLoading import *
-from utils.ResultProcessing import generate_images
+from utils.ResultProcessing import generate_images, mae
 
 """## Generator
 
@@ -33,7 +34,6 @@ from utils.ResultProcessing import generate_images
 """
 
 
-# %%
 def downsample(filters, size, apply_batchnorm=True):
     initializer = tf.random_normal_initializer(0., 0.02)
 
@@ -50,7 +50,6 @@ def downsample(filters, size, apply_batchnorm=True):
     return result
 
 
-# %%
 def upsample(filters, size, apply_dropout=False):
     initializer = tf.random_normal_initializer(0., 0.02)
 
@@ -71,7 +70,6 @@ def upsample(filters, size, apply_dropout=False):
     return result
 
 
-# %%
 def Generator():
     inputs = tf.keras.layers.Input(
         shape=[IMG_HEIGHT, IMG_WIDTH, INPUT_CHANNELS])
@@ -137,7 +135,7 @@ def generator_loss(disc_generated_output, gen_output, target):
         disc_generated_output), disc_generated_output)
 
     # mean absolute error
-    l1_loss = tf.reduce_mean(tf.abs(target - gen_output))
+    l1_loss = mae(gen_output, target)
 
     total_gen_loss = gan_loss + (L1_LAMBDA * l1_loss)
 
@@ -209,6 +207,10 @@ def discriminator_loss(disc_real_output, disc_generated_output):
 """
 
 
+def checkpoint_loss(predicted, target):
+    return mae(predicted, target)
+
+
 @tf.function
 def train_step(input_image, target, epoch):
     with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
@@ -246,13 +248,14 @@ def train_step(input_image, target, epoch):
 """
 
 
-def fit(train_ds, epochs, test_ds):
+def fit(train_ds, epochs, val_ds):
     checkpoint.restore(manager.latest_checkpoint)
     if manager.latest_checkpoint:
         print("Restored from {}".format(manager.latest_checkpoint))
     else:
         print("Initializing from scratch.")
 
+    best_val_loss = float('inf')
     for epoch in range(epochs):
         start = time.time()
 
@@ -270,15 +273,19 @@ def fit(train_ds, epochs, test_ds):
             train_step(input_image, target, epoch)
         print()
 
-        # saving (checkpoint) the model every EPOCHS epochs
-        if (epoch + 1) % SAVE_CYCLE == 0:
+        gen_val_loss = 0
+        for (val_input, val_target) in val_ds:
+            predicted = generator(val_input, training=True)
+            gen_val_loss = gen_val_loss + checkpoint_loss(predicted, val_target)
+
+        if gen_val_loss < best_val_loss:
             save_path = manager.save()
-            print("Saved checkpoint for epoch {}: {}".format(
-                int(epoch), save_path))
+            print(f"Saved checkpoint for epoch {int(epoch)}: {save_path}")
+            print(f"New best model found with validation loss {gen_val_loss}")
+            best_val_loss = gen_val_loss
 
         print('Time taken for epoch {} is {} sec\n'.format(epoch + 1,
                                                            time.time() - start))
-    # checkpoint.save(file_prefix=checkpoint_prefix)
 
 
 if __name__ == '__main__':
@@ -298,7 +305,7 @@ if __name__ == '__main__':
 
     # Tunable hyperparameters
     BATCH_SIZE = 64
-    EPOCHS = 400
+    EPOCHS = 2
     SCALE_TARGET = 100
     L1_LAMBDA = 100
 
@@ -315,8 +322,9 @@ if __name__ == '__main__':
     # fix the random seed
     np.random.seed(1)
 
-    input_dir = 'input_data_' + dataset_code
-    output_dir = 'output_data_' + dti_param
+    data_dir = "data"
+    input_dir = os.path.join(data_dir, 'input_data_' + dataset_code)
+    output_dir = os.path.join(data_dir, 'output_data_' + dti_param)
 
     # list of arrays
     input_list = glob.glob(os.path.join(input_dir, '*.npz'))
@@ -352,9 +360,10 @@ if __name__ == '__main__':
 
     # Training Dataset
     print("Training Dataset")
-    train_ds = get_baseline_dataset(train_inputs, train_outputs)
-    train_ds = train_ds.map(augment,
-                            num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    train_ds = get_baseline_dataset(train_inputs, train_outputs, dti_param)
+    train_ds = train_ds.map(
+        lambda img_in, img_out: augment(img_in, img_out, IMG_HEIGHT, IMG_WIDTH, INPUT_CHANNELS, OUTPUT_CHANNELS),
+        num_parallel_calls=tf.data.experimental.AUTOTUNE)
     train_ds = train_ds.shuffle(BUFFER_SIZE)
     train_ds = train_ds.batch(BATCH_SIZE)
     train_ds = train_ds.cache()
@@ -409,7 +418,7 @@ if __name__ == '__main__':
     generator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
     discriminator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
 
-    checkpoint_dir = './checkpoints/investigating_batch_size_UNet_4avg_64'
+    checkpoint_dir = os.path.join('checkpoints', 'pix2pix_unet', f'batch_size={BATCH_SIZE}-epochs={EPOCHS}')
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
     checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                      discriminator_optimizer=discriminator_optimizer,
@@ -419,19 +428,17 @@ if __name__ == '__main__':
     manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=2)
 
     for (example_input, example_target) in val_ds.take(3):
-        generate_images(generator, example_input, example_target)
+        generate_images(generator, example_input, example_target, scale_factor=SCALE_TARGET)
 
-    # %%
-    log_dir = "logs/pix2pix_unet/"
+    log_dir = os.path.join('logs', 'pix2pix_unet')
 
     summary_writer = tf.summary.create_file_writer(
-        log_dir + "batch_size=" + str(BATCH_SIZE))
+        os.path.join(log_dir, "batch_size=" + str(BATCH_SIZE)))
 
     """### Tensorboard viewer"""
-
-    # #docs_infra: no_execute
-    get_ipython().run_line_magic('load_ext', 'tensorboard')
-    get_ipython().run_line_magic('tensorboard', '--logdir {log_dir}')
+    tb = program.TensorBoard()
+    tb.configure(argv=[None, '--logdir', log_dir])
+    url = tb.launch()
 
     fit(train_ds, EPOCHS, val_ds)
 
