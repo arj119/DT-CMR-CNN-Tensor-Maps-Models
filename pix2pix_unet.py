@@ -22,6 +22,7 @@ from IPython import display
 
 # Commented out IPython magic to ensure Python compatibility.
 from utils.DataLoading import *
+from utils.ResultProcessing import generate_images
 
 """## Generator
 
@@ -95,7 +96,6 @@ def Generator():
         upsample(64, 4),  # (bs, 128, 128, 128)
     ]
 
-    # I changed the activation from tanh to linear - Trying relu
     initializer = tf.random_normal_initializer(0., 0.02)
     # leaky_relu = tf.keras.activations.relu(x, alpha = 0.1)
     last = tf.keras.layers.Conv2DTranspose(OUTPUT_CHANNELS, 4,
@@ -157,6 +157,7 @@ def generator_loss(disc_generated_output, gen_output, target):
 ### Build the Discriminator
 """
 
+
 def Discriminator():
     initializer = tf.random_normal_initializer(0., 0.02)
 
@@ -199,53 +200,6 @@ def discriminator_loss(disc_real_output, disc_generated_output):
     return total_disc_loss
 
 
-"""## Generate Images
-
-Write a function to plot some images during training.
-
-* We pass images from the test dataset to the generator.
-* The generator will then translate the input image into the output.
-* Last step is to plot the predictions and **voila!**
-
-Note: The `training=True` is intentional here since
-we want the batch statistics while running the model
-on the test dataset. If we use training=False, we will get
-the accumulated statistics learned from the training dataset (which we don't want)
-"""
-def denormalise_output(arr):
-    return arr / SCALE_TARGET
-
-def generate_images(model, test_input, tar):
-    prediction = model(test_input, training=True)
-    plt.figure(figsize=(15, 15))
-    target = denormalise_output(tar[0, :, :, 5])
-    prediction = denormalise_output(prediction[0, :, :, 5])
-    abs_diff = abs(target - prediction)
-    mean_abs_diff = np.mean(abs_diff)
-    median_abs_diff = np.median(abs_diff)
-    mean_relative_difference = abs(np.mean(target) - np.mean(prediction)) / np.mean(target) * 100
-    display_list = [target, prediction, abs_diff]
-
-    title = ['Ground Truth', 'Predicted Image', 'Absolute Difference']
-
-    fig = plt.figure(frameon=False)
-    fig.set_size_inches(20, 20)
-
-    for i in range(3):
-        plt.subplot(1, 4, i + 1)
-        # Get rid of white colour if not in dark mode
-        plt.title(title[i], {'color': 'white'})
-        im = plt.imshow(display_list[i])
-        if title[i] != 'Input':
-            plt.clim(0, 0.003)
-        plt.colorbar(im, fraction=0.046, pad=0.04)
-        plt.axis('off')
-    plt.show()
-    print("Mean absolute error: " + str(mean_abs_diff))
-    print("Median absolute error: " + str(median_abs_diff))
-    print("Mean difference percentage error: " + str(mean_relative_difference))
-
-
 """## Training
 * For each example input generate an output.
 * The discriminator receives the input_image and the generated image as the first input. The second input is the input_image and the target_image.
@@ -285,6 +239,13 @@ def train_step(input_image, target, epoch):
         tf.summary.scalar('disc_loss', disc_loss, step=epoch)
 
 
+"""### The actual training loop:
+* Iterates over the number of epochs.
+* On each epoch it clears the display, and runs `generate_images` to show it's progress.
+* On each epoch it iterates over the training dataset, printing a '.' for each example.
+"""
+
+
 def fit(train_ds, epochs, test_ds):
     checkpoint.restore(manager.latest_checkpoint)
     if manager.latest_checkpoint:
@@ -298,8 +259,8 @@ def fit(train_ds, epochs, test_ds):
         display.clear_output(wait=True)
 
         for (example_input, example_target) in val_ds.take(1):
-            generate_images(generator, example_input, example_target)
-        print("Epoch: ", epoch)
+            generate_images(generator, example_input, example_target, SCALE_TARGET)
+        print(f"Epoch: {epoch}")
 
         # Train
         for n, (input_image, target) in train_ds.enumerate():
@@ -320,15 +281,7 @@ def fit(train_ds, epochs, test_ds):
     # checkpoint.save(file_prefix=checkpoint_prefix)
 
 
-"""### The actual training loop:
-* Iterates over the number of epochs.
-* On each epoch it clears the display, and runs `generate_images` to show it's progress.
-* On each epoch it iterates over the training dataset, printing a '.' for each example.
-* It saves a checkpoint every 20 epochs.
-"""
-
 if __name__ == '__main__':
-    # Hyperparameters
 
     # DTI parameter to train (fa, ha, e2a, dt etc...)
     dti_param = 'dt'
@@ -341,9 +294,11 @@ if __name__ == '__main__':
     INPUT_CHANNELS = 13
     OUTPUT_CHANNELS = 6
     BUFFER_SIZE = 225
+    SAVE_CYCLE = 100
+
+    # Tunable hyperparameters
     BATCH_SIZE = 64
     EPOCHS = 400
-    SAVE_CYCLE = 100
     SCALE_TARGET = 100
     L1_LAMBDA = 100
 
@@ -414,33 +369,22 @@ if __name__ == '__main__':
     test_ds = get_baseline_dataset(test_inputs, test_outputs, dti_param)
     test_ds = test_ds.batch(BATCH_SIZE)
 
-    # %%
     temp_array = np.load(input_list[0])
     temp_array = temp_array['arr_0']
     temp_array = tf.convert_to_tensor(temp_array, dtype=tf.float32)
-    down_model = downsample(INPUT_CHANNELS, 4)
-    down_result = down_model(tf.expand_dims(temp_array, 0))
-    print(down_result.shape)
 
-    # %%
-    up_model = upsample(13, 4)
-    up_result = up_model(down_result)
-    print(up_result.shape)
-
-    # %%
+    # Generator
     generator = Generator()
     tf.keras.utils.plot_model(generator, show_shapes=True, dpi=128)
 
-    # %%
     gen_output = generator(temp_array[tf.newaxis, ...], training=False)
     plt.imshow(gen_output[0, :, :, 0])
     plt.show()
 
-    # %%
+    # Discriminator
     discriminator = Discriminator()
     tf.keras.utils.plot_model(discriminator, show_shapes=True, dpi=128)
 
-    # %%
     disc_out = discriminator(
         [temp_array[tf.newaxis, ...], gen_output], training=False)
     plt.imshow(disc_out[0, ..., -1], vmin=-20, vmax=20, cmap='RdBu_r')
@@ -472,13 +416,13 @@ if __name__ == '__main__':
                                      generator=generator,
                                      discriminator=discriminator)
 
-    manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=1)
+    manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=2)
 
     for (example_input, example_target) in val_ds.take(3):
         generate_images(generator, example_input, example_target)
 
     # %%
-    log_dir = "logs/batch_size_investigation/"
+    log_dir = "logs/pix2pix_unet/"
 
     summary_writer = tf.summary.create_file_writer(
         log_dir + "batch_size=" + str(BATCH_SIZE))
@@ -489,17 +433,8 @@ if __name__ == '__main__':
     get_ipython().run_line_magic('load_ext', 'tensorboard')
     get_ipython().run_line_magic('tensorboard', '--logdir {log_dir}')
 
-    fit(train_ds, 301, val_ds)
+    fit(train_ds, EPOCHS, val_ds)
 
     """# Results"""
-
-    checkpoint.restore(manager.latest_checkpoint)
-    if manager.latest_checkpoint:
-        print("Restored from {}".format(manager.latest_checkpoint))
-    else:
-        print("Initializing from scratch.")
-
     for (example_input, example_target) in test_ds.take(10):
-        generate_images(generator, example_input, example_target)
-
-    generator.save("./Arjun_generator_models/UNetGen3dirAverages/model_input_scaled.h5")
+        generate_images(generator, example_input, example_target, SCALE_TARGET)
