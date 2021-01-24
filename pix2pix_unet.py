@@ -9,6 +9,7 @@ Original file is located at
 
 ## Mount drive folders containing dataset
 """
+import sys
 
 from sklearn.model_selection import train_test_split
 import pandas as pd
@@ -16,9 +17,9 @@ from datetime import datetime
 import glob
 import os
 import time
-from IPython import get_ipython
 from matplotlib import pyplot as plt
 from IPython import display
+import IPython
 from tensorboard import program
 
 # Commented out IPython magic to ensure Python compatibility.
@@ -256,13 +257,14 @@ def fit(train_ds, epochs, val_ds):
         print("Initializing from scratch.")
 
     best_val_loss = float('inf')
+    # prev_val_loss = best_val_loss
     for epoch in range(epochs):
         start = time.time()
 
         display.clear_output(wait=True)
 
-        for (example_input, example_target) in val_ds.take(1):
-            generate_images(generator, example_input, example_target, SCALE_TARGET)
+        for (input_image, target) in val_ds.take(1):
+            generate_images(generator, input_image, target, SCALE_TARGET)
         print(f"Epoch: {epoch}")
 
         # Train
@@ -283,6 +285,12 @@ def fit(train_ds, epochs, val_ds):
             print(f"Saved checkpoint for epoch {int(epoch)}: {save_path}")
             print(f"New best model found with validation loss {gen_val_loss}")
             best_val_loss = gen_val_loss
+
+        # # Early stopping
+        # if epoch % 5:
+        #     if gen_val_loss > prev_val_loss:
+        #         break
+        #     prev_val_loss = gen_val_loss
 
         print('Time taken for epoch {} is {} sec\n'.format(epoch + 1,
                                                            time.time() - start))
@@ -305,7 +313,7 @@ if __name__ == '__main__':
 
     # Tunable hyperparameters
     BATCH_SIZE = 64
-    EPOCHS = 2
+    EPOCHS = 300
     SCALE_TARGET = 100
     L1_LAMBDA = 100
 
@@ -315,9 +323,8 @@ if __name__ == '__main__':
 
     # cnn filename with date dti parameter and dataset code
     date_time_str = "{:%Y_%m_%d_%H_%M_%S}".format(datetime.now())
-    # cnn_name_new = dti_param + '_' + dataset_code + \
-    #     '_u_net_weights_' + date_time_str + '.hdf5'
-    # current_dir = sys.path[0]
+    cnn_name = f"pix2pix_u_net_{dti_param}_{dataset_code}_batch_size={BATCH_SIZE}_{date_time_str}.hdf5"
+    model_dir = os.path.join('models', dti_param)
 
     # fix the random seed
     np.random.seed(1)
@@ -360,7 +367,7 @@ if __name__ == '__main__':
 
     # Training Dataset
     print("Training Dataset")
-    train_ds = get_baseline_dataset(train_inputs, train_outputs, dti_param)
+    train_ds = get_baseline_dataset(train_inputs, train_outputs, dti_param, SCALE_TARGET)
     train_ds = train_ds.map(
         lambda img_in, img_out: augment(img_in, img_out, IMG_HEIGHT, IMG_WIDTH, INPUT_CHANNELS, OUTPUT_CHANNELS),
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
@@ -370,12 +377,12 @@ if __name__ == '__main__':
 
     # Validation Dataset
     print("Validation Dataset")
-    val_ds = get_baseline_dataset(val_inputs, val_outputs, dti_param)
+    val_ds = get_baseline_dataset(val_inputs, val_outputs, dti_param, SCALE_TARGET)
     val_ds = val_ds.batch(BATCH_SIZE)
 
     # Training Dataset
     print("Test Dataset")
-    test_ds = get_baseline_dataset(test_inputs, test_outputs, dti_param)
+    test_ds = get_baseline_dataset(test_inputs, test_outputs, dti_param, SCALE_TARGET)
     test_ds = test_ds.batch(BATCH_SIZE)
 
     temp_array = np.load(input_list[0])
@@ -439,9 +446,25 @@ if __name__ == '__main__':
     tb = program.TensorBoard()
     tb.configure(argv=[None, '--logdir', log_dir])
     url = tb.launch()
+    print(url)
 
-    fit(train_ds, EPOCHS, val_ds)
+    # fit(train_ds, EPOCHS, val_ds)
+
+    """### Save model """
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+
+    """### Load best model """
+    checkpoint.restore(manager.latest_checkpoint)
+    if manager.latest_checkpoint:
+        print("Restored from {}".format(manager.latest_checkpoint))
+    else:
+        print("Initializing from scratch.")
+
+    generator.save(os.path.join(model_dir, cnn_name))
 
     """# Results"""
     for (example_input, example_target) in test_ds.take(10):
         generate_images(generator, example_input, example_target, SCALE_TARGET)
+
+    print("Finished")

@@ -102,10 +102,10 @@ def augment(img_in, img_out, height, width, input_channels, output_channels):
 
 
 # get the tensorflow train and validate datasets to tensorflow
-def get_baseline_dataset(input_list, output_list, dti_param):
+def get_baseline_dataset(input_list, output_list, dti_param, scale_factor):
     # read arrays
     input_arrays, output_arrays = load_npz_files(
-        input_list, output_list, dti_param)
+        input_list, output_list, dti_param, scale_factor=scale_factor)
 
     dataset = tf.data.Dataset.from_tensor_slices((input_arrays, output_arrays))
     data_info(input_arrays, dti_param, is_output=False)
