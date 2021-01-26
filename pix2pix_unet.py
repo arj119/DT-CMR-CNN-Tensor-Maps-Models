@@ -208,10 +208,6 @@ def discriminator_loss(disc_real_output, disc_generated_output):
 """
 
 
-def checkpoint_loss(predicted, target):
-    return mae(predicted, target)
-
-
 @tf.function
 def train_step(input_image, target, epoch):
     with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
@@ -242,6 +238,15 @@ def train_step(input_image, target, epoch):
         tf.summary.scalar('disc_loss', disc_loss, step=epoch)
 
 
+# Returns mean absolute error over whole validation set
+def checkpoint_loss(generator, val_ds):
+    gen_val_loss = 0
+    for (val_input, val_target) in val_ds:
+        predicted = generator(val_input, training=True)
+        gen_val_loss = gen_val_loss + tf.abs(val_target - predicted)
+    return tf.reduce_mean(gen_val_loss)
+
+
 """### The actual training loop:
 * Iterates over the number of epochs.
 * On each epoch it clears the display, and runs `generate_images` to show it's progress.
@@ -263,8 +268,6 @@ def fit(train_ds, epochs, val_ds):
 
         display.clear_output(wait=True)
 
-        for (input_image, target) in val_ds.take(1):
-            generate_images(generator, input_image, target, SCALE_TARGET)
         print(f"Epoch: {epoch}")
 
         # Train
@@ -275,16 +278,16 @@ def fit(train_ds, epochs, val_ds):
             train_step(input_image, target, epoch)
         print()
 
-        gen_val_loss = 0
-        for (val_input, val_target) in val_ds:
-            predicted = generator(val_input, training=True)
-            gen_val_loss = gen_val_loss + checkpoint_loss(predicted, val_target)
+        gen_val_loss = checkpoint_loss(generator, val_ds)
 
         if gen_val_loss < best_val_loss:
             save_path = manager.save()
             print(f"Saved checkpoint for epoch {int(epoch)}: {save_path}")
             print(f"New best model found with validation loss {gen_val_loss}")
             best_val_loss = gen_val_loss
+
+            for (input_image, target) in val_ds.take(1):
+                generate_images(generator, input_image, target, SCALE_OUTPUT)
 
         # # Early stopping
         # if epoch % 5:
@@ -314,7 +317,7 @@ if __name__ == '__main__':
     # Tunable hyperparameters
     BATCH_SIZE = 64
     EPOCHS = 300
-    SCALE_TARGET = 100
+    SCALE_OUTPUT = 100
     L1_LAMBDA = 100
 
     print('====================================================')
@@ -322,14 +325,14 @@ if __name__ == '__main__':
     print('Dataset code: ' + dataset_code)
 
     # cnn filename with date dti parameter and dataset code
-    date_time_str = "{:%Y_%m_%d_%H_%M_%S}".format(datetime.now())
-    cnn_name = f"pix2pix_u_net_{dti_param}_{dataset_code}_batch_size={BATCH_SIZE}_{date_time_str}.hdf5"
+    date_time_str = "{:%Y-%d-%m_%H-%M-%S}".format(datetime.now())
+    cnn_name = f"pix2pix_u_net_dti-param={dti_param}_dataset={dataset_code}_batch_size={BATCH_SIZE}__epochs={EPOCHS}_{date_time_str}"
     model_dir = os.path.join('models', dti_param)
 
     # fix the random seed
     np.random.seed(1)
 
-    data_dir = "data"
+    data_dir = os.path.join("data", "new")
     input_dir = os.path.join(data_dir, 'input_data_' + dataset_code)
     output_dir = os.path.join(data_dir, 'output_data_' + dti_param)
 
@@ -367,7 +370,7 @@ if __name__ == '__main__':
 
     # Training Dataset
     print("Training Dataset")
-    train_ds = get_baseline_dataset(train_inputs, train_outputs, dti_param, SCALE_TARGET)
+    train_ds = get_baseline_dataset(train_inputs, train_outputs, dti_param, SCALE_OUTPUT)
     train_ds = train_ds.map(
         lambda img_in, img_out: augment(img_in, img_out, IMG_HEIGHT, IMG_WIDTH, INPUT_CHANNELS, OUTPUT_CHANNELS),
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
@@ -377,12 +380,12 @@ if __name__ == '__main__':
 
     # Validation Dataset
     print("Validation Dataset")
-    val_ds = get_baseline_dataset(val_inputs, val_outputs, dti_param, SCALE_TARGET)
+    val_ds = get_baseline_dataset(val_inputs, val_outputs, dti_param, SCALE_OUTPUT)
     val_ds = val_ds.batch(BATCH_SIZE)
 
     # Training Dataset
     print("Test Dataset")
-    test_ds = get_baseline_dataset(test_inputs, test_outputs, dti_param, SCALE_TARGET)
+    test_ds = get_baseline_dataset(test_inputs, test_outputs, dti_param, SCALE_OUTPUT)
     test_ds = test_ds.batch(BATCH_SIZE)
 
     temp_array = np.load(input_list[0])
@@ -425,7 +428,9 @@ if __name__ == '__main__':
     generator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
     discriminator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
 
-    checkpoint_dir = os.path.join('checkpoints', 'pix2pix_unet', f'batch_size={BATCH_SIZE}-epochs={EPOCHS}')
+    checkpoint_log_file_path = os.path.join('pix2pix_unet', dti_param, dataset_code, cnn_name)
+
+    checkpoint_dir = os.path.join('checkpoints', checkpoint_log_file_path)
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
     checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                      discriminator_optimizer=discriminator_optimizer,
@@ -435,12 +440,11 @@ if __name__ == '__main__':
     manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=2)
 
     for (example_input, example_target) in val_ds.take(3):
-        generate_images(generator, example_input, example_target, scale_factor=SCALE_TARGET)
+        generate_images(generator, example_input, example_target, scale_factor=SCALE_OUTPUT)
 
-    log_dir = os.path.join('logs', 'pix2pix_unet')
+    log_dir = os.path.join('logs', checkpoint_log_file_path)
 
-    summary_writer = tf.summary.create_file_writer(
-        os.path.join(log_dir, "batch_size=" + str(BATCH_SIZE)))
+    summary_writer = tf.summary.create_file_writer(log_dir)
 
     """### Tensorboard viewer"""
     tb = program.TensorBoard()
@@ -461,10 +465,10 @@ if __name__ == '__main__':
     else:
         print("Initializing from scratch.")
 
-    generator.save(os.path.join(model_dir, cnn_name))
+    generator.save(os.path.join(model_dir, f'{cnn_name}.hdf5'))
 
     """# Results"""
     for (example_input, example_target) in test_ds.take(10):
-        generate_images(generator, example_input, example_target, SCALE_TARGET)
+        generate_images(generator, example_input, example_target, SCALE_OUTPUT)
 
     print("Finished")
